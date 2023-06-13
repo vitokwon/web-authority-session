@@ -26,6 +26,22 @@ router.get("/signup", function (req, res) {
   res.render("signup", { inputData: sessionInputData });
 });
 
+router.get("/login", function (req, res) {
+  let sessionInputData = req.session.inputData;
+  // 첫방문 시, inputData 초기화 (입력창 빈칸유지)
+  if (!sessionInputData) {
+    sessionInputData = {
+      hasError: false,
+      email: "",
+      password: "",
+    };
+  }
+  // 세션(inputData) 초기화
+  req.session.inputData = null;
+  //  로그인 성공 후, 저장된 세션값 전달
+  res.render("login", { inputData: sessionInputData });
+});
+
 router.post("/signup", async function (req, res) {
   const userData = req.body;
   const enteredEmail = userData.email;
@@ -35,12 +51,12 @@ router.post("/signup", async function (req, res) {
   if (
     !enteredEmail ||
     !enteredConfirmEmail ||
-    enteredPassword ||
+    !enteredPassword ||
     enteredPassword.trim() < 6 ||
     enteredEmail !== enteredConfirmEmail ||
-    !enteredEmail.incldues("@")
+    !enteredEmail.includes("@")
   ) {
-
+    // 기존 입력값 세션에 저장하여 처리 실패 후에도 입력 유지
     req.session.inputData = {
       hasError: true,
       message: "Invalid input - please check your data.",
@@ -61,9 +77,22 @@ router.post("/signup", async function (req, res) {
     .collection("users")
     .findOne({ email: enteredEmail });
 
+  // 사용자 이미 존재 시,
   if (existingUser) {
-    console.log("User exists already");
-    return res.redirect("/sign");
+    req.session.inputData = {
+      hasError: true,
+      message: "User exists already!",
+      email: enteredEmail,
+      confirmEmail: enteredConfirmEmail,
+      password: enteredPassword,
+    };
+
+    // 세션을 저장한 후에만 리다이렉트
+    req.session.save(function () {
+      res.redirect("/signup");
+    });
+    // 사용자 가입에 실패한 경우, 코드 진행 전 반환.
+    return;
   }
 
   const hashedPassword = await bcrypt.hash(enteredPassword, 12);
@@ -78,10 +107,6 @@ router.post("/signup", async function (req, res) {
   res.redirect("/login");
 });
 
-router.get("/login", function (req, res) {
-  res.render("login");
-});
-
 router.post("/login", async function (req, res) {
   const userData = req.body;
   const enteredEmail = userData.email;
@@ -93,8 +118,19 @@ router.post("/login", async function (req, res) {
     .findOne({ email: enteredEmail });
 
   if (!existingUser) {
-    console.log("Could not log in!");
-    return res.redirect("/login");
+    // 가입된 사용자가 없을 시
+    req.session.inputData = {
+      hasError: true,
+      message: "Could not log you in - please check your credentials!",
+      email: enteredEmail,
+      password: enteredPassword,
+    };
+    // 세션을 저장한 후에만 리다이렉트
+    req.session.save(function () {
+      res.redirect("/login");
+    });
+    // 사용자 가입에 실패한 경우, 코드 진행 전 반환.
+    return;
   }
 
   const passwordAreEqual = await bcrypt.compare(
@@ -103,8 +139,18 @@ router.post("/login", async function (req, res) {
   );
 
   if (!passwordAreEqual) {
-    console.log("Could not log in - passwords are not equal!");
-    return res.redirect("/login");
+    // 패스워드 불일치 시
+    req.session.inputData = {
+      hasError: true,
+      message: "Could not log you in - please check your credentials!",
+      email: enteredEmail,
+      password: enteredPassword,
+    };
+
+    req.session.save(function () {
+      return res.redirect("/login");
+    });
+    return;
   }
 
   req.session.user = { id: existingUser._id, email: existingUser.email };
@@ -116,22 +162,32 @@ router.post("/login", async function (req, res) {
 });
 
 router.get("/admin", async function (req, res) {
-  if (!req.session.isAuthenticated) {
+  // 미들웨어설정함으로써 locals 사용 가능
+  if (!res.locals.isAuth) {
+    // if(!req.session.isAuthenticated) {
     // if(!req.session.user)
     return res.status(401).render("401");
   }
 
-  const user = await db.getDb().collection('users').findOne({_id: req.session.user.id});
+  // 미들웨어 설정으로 사용자를 갖고 올 필요 없어짐
+  // const user = await db
+  //   .getDb()
+  //   .collection("users")
+  //   .findOne({ _id: req.session.user.id });
 
-  if (!user || !user.isAdmin) {
-      return res.status(403).render('403')
+  // 미들웨어설정으로 locals 사용
+  if (!res.locals.isAdmin) {
+    // if (!user || !user.isAdmin) {
+    return res.status(403).render("403"); // 다음코드가 실행되지 않도록 return 사용
   }
 
   res.render("admin");
 });
 
 router.get("/profile", function (req, res) {
-  if (!req.session.isAuthenticated) {
+  // 미들웨어 설정로 locals 사용
+  if (!res.locals.isAuth) {
+    // if (!req.session.isAuthenticated) {
     // if(!req.session.user)
     return res.status(401).render("401");
   }

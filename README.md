@@ -483,7 +483,7 @@ db.users.updateOne({_id: ObjectId("...")}, {$set: { isAdmin: true }})
     -   또는, 각 라우트에 권한 인증 확인 추가
 
 ```JavaScript
-    
+
     const user = await db.getDb().collection('users').findOne({_id: req.sessions.user.id});
 
     if (!user || !user.isAdmin) {
@@ -492,3 +492,135 @@ db.users.updateOne({_id: ObjectId("...")}, {$set: { isAdmin: true }})
 
     res.render('admin')
 ```
+
+## 11) 추가 세션 작업 (커스텀미들웨어, locals 적용)
+
+    - 중복 이메일 가입 방지 (사용자 이미 존재 시)
+    - 로그인 (아이디 또는 패스워드 불일치)
+
+```JavaScript
+//  router.post("/signup", async function (req, res) {
+    //...생략
+  if (existingUser) { // 사용자 이미 존재 시,
+  // if (!existingUser) { // 가입된 사용자가 없을 시
+  // if (!passwordAreEqual) { // 패스워드 불일치 시
+    req.session.inputData = {
+      hasError: true,
+      message: "User exists already!", //사용자 이미 존재 시
+      email: enteredEmail,
+      confirmEmail: enteredConfirmEmail,
+      password: enteredPassword,
+    };
+
+    // 세션을 저장한 후에만 리다이렉트
+    req.session.save(function () {
+      res.redirect("/signup");
+    });
+    // 처리에 실패한 경우, 이후 코드 진행 전 반환시켜서 동작 중지.
+    return;
+  }
+```
+
+    - 권한에 따른 불필요한 네비게이션 바 목록 숨김 (expressJS의 미들웨어 기능 사용)
+    - 모든 템플릿에 자동으로 노출될 일부 데이터를 설정하는 자체 미들웨어 생성
+```JavaScript
+// 노출될 데이터를 설정하는 미들웨어 설정
+app.use(async function (req, res, next) {
+  const user = req.session.user;
+  const isAuth = req.session.isAuthenticated;
+
+  // false, 0, "", null, undefined, NaN = falsy 값
+  if (!user || !isAuth) {
+    return next(); // 다음 미들웨어, 또는 라우트로 이동시킴
+  }
+
+  const userDoc = await db
+    .getDb()
+    .collection("users")
+    .findOne({ _id: user.id });
+  const isAdmin = userDoc.isAdmin;
+
+  // 수집한 정보를 특정 위치에 저장하기 위한 expressJS 기능
+  // 데이터를 명시적으로 저장하지 않고 모든 템플릿에서 엑세스 가능
+  // 해당 요청의 응답동안만 사용 가능함. (새 요청에서는 데이터 없음)
+  // 전역 변수임.
+  res.locals.isAuth = isAuth;
+  res.locals.isAdmin = isAdmin;
+
+  // demoRoutes에 도달하기 전 모든 요청에 대해 실행되므로 굉장히 유용함
+  // 이제 header.ejs에서 사용 가능함. (각 라우트별로 변수로 보내줄 필요 없어졌음)
+  next();
+});
+```
+    -   header.ejs에서 미들웨어에서 설정한 locals 사용
+```HTML
+    <ul>
+      <li><a href="/">Home</a></li>
+      <% if (!locals.isAuth) { %> 
+        <li><a href="/signup">Signup</a></li>
+        <li><a href="/login">Login</a></li>
+        <% } %>
+      <% if (locals.isAdmin) { %> 
+        <li><a href="/admin">Admin</a></li>
+        <% } %>
+      <li><a href="/profile">Profile</a></li>
+      <!-- 데이터를 명시적으로 전달하지 않고, 
+        로컬키로 모든 템플릿에서 사용 가능 -->
+      <% if (locals.isAuth) { %>
+      <li>
+        <form action="/logout" method="POST">
+          <button>Logout</button>
+        </form>
+      </li>
+      <% } %>
+    </ul>
+```
+    -   라우트에 커스텀 미들웨어 적용
+```JavaScript
+router.get("/admin", async function (req, res) {
+  // 미들웨어설정함으로써 locals 사용 가능
+  if (!res.locals.isAuth) {
+    // if(!req.session.isAuthenticated) {
+    // if(!req.session.user)
+    return res.status(401).render("401");
+  }
+
+  // 미들웨어 설정으로 사용자를 갖고 올 필요 없어짐
+  // const user = await db
+  //   .getDb()
+  //   .collection("users")
+  //   .findOne({ _id: req.session.user.id });
+
+  // 미들웨어설정으로 locals 사용
+  if (!res.locals.isAdmin) {
+    // if (!user || !user.isAdmin) {
+    return res.status(403).render("403"); // 다음코드가 실행되지 않도록 return 사용
+  }
+
+  res.render("admin");
+});
+
+router.get("/profile", function (req, res) {
+  // 미들웨어 설정로 locals 사용
+  if (!res.locals.isAuth) {
+    // if (!req.session.isAuthenticated) {
+    // if(!req.session.user)
+    return res.status(401).render("401");
+  }
+  res.render("profile");
+});
+```
+
+## 12) 정리
+    -   특정 페이지 권한 또는 작업 제한
+    -   사용자 계정 인증 및 권한 부여
+    -   세션과 쿠키 활용
+        -   자격 증명의 유효성 검사 후 데이터베이스 저장
+        -   세션ID가 있는 쿠키를 클라이언트로 전송
+        -   브라우저가 해당 쿠키를 저장
+        -   추후 요청과 함께 전송
+        -   세션ID로 클라이언트가 속한 세션을 확인하여 검증
+    -   세션을 활용한 기존 입력값 유지 및 에러메세지 출력
+    -   인증과 권한 부여의 차이점
+        -   인증은 받았지만 모든 데이터와 페이지에 대한 권한은 별도
+
